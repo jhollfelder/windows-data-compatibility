@@ -1,0 +1,112 @@
+<form version="1.1">
+  <search id="all_windows_data">
+    <query>| union 
+    [| tstats dc(host) AS count where index=* AND (sourcetype=Perfmon* OR sourcetype=*WinEventLog) by index, sourcetype, host 
+    | eval index_type="events_index" 
+    | fields index, sourcetype, host, index_type] 
+    [| mcatalog values(_dims) AS dims where index=itsi_im_metrics by index, sourcetype, host 
+    | eval index_type="metrics_index" 
+    | fields index, sourcetype, host, index_type] 
+| eval "Data Type"=case(match(index_type,"events") AND match(sourcetype,"Perfmon:"),"Perfmon Events (single)",match(index_type,"events") AND match(sourcetype,"PerfmonMk:"),"Perfmon Events (multi)",match(index_type,"metrics") AND match(sourcetype,"Perfmon:"),"Perfmon Metrics (unformatted)",match(index_type,"metrics") AND match(sourcetype,"PerfmonMetrics:"),"Perfmon Metrics (formatted)",match(index_type,"events") AND match(sourcetype,"^WinEventLog"),"Event Logs (classic)",match(index_type,"events") AND match(sourcetype,"^XmlWinEventLog"),"Event Logs (classic)",true(),"Nonstandard format") </query>
+    <earliest>$timerange.earliest$</earliest>
+    <latest>$timerange.latest$</latest>
+  </search>
+  <label>Windows Data Compatibility Check (classic)</label>
+  <fieldset submitButton="false">
+    <input type="time" token="timerange" searchWhenChanged="true">
+      <label></label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <table>
+        <search>
+          <query>| union 
+    [| tstats dc(host) AS count where index=* AND (sourcetype=Perfmon*CPU OR sourcetype=*WinEventLog) by index, sourcetype, host 
+    | eval index_type="events_index" 
+    | fields index, sourcetype, host, index_type] 
+    [| mcatalog values(_dims) AS dims where index=itsi_im_metrics by index, sourcetype, host 
+    | eval index_type="metrics_index" 
+    | fields index, sourcetype, host, index_type] 
+| eval "Data Type"=case(match(index_type,"events") AND match(sourcetype,"Perfmon:"),"Perfmon Events (single)",match(index_type,"events") AND match(sourcetype,"PerfmonMk:"),"Perfmon Events (multi)",match(index_type,"metrics") AND match(sourcetype,"Perfmon:"),"Perfmon Metrics (unformatted)",match(index_type,"metrics") AND match(sourcetype,"PerfmonMetrics:"),"Perfmon Metrics (formatted)",match(index_type,"events") AND match(sourcetype,"^WinEventLog"),"Event Logs (classic)",match(index_type,"events") AND match(sourcetype,"^XmlWinEventLog"),"Event Logs (classic)",true(),"Nonstandard format") 
+| inputlookup append=t windows_data_compatibility.csv 
+| eval lower_host=lower(host) 
+| eventstats dc(lower_host) AS total_hosts 
+| stats max(total_hosts) AS total_hosts, dc(lower_host) AS count by "Data Type" 
+| inputlookup append=t windows_data_compatibility.csv 
+| eval percentage=round(count/total_hosts*100,1) 
+| eval onboarded_hosts=printf("%s/%s (%s%)",count,total_hosts,percentage) 
+| fields "Data Type", onboarded_hosts 
+| inputlookup append=t windows_data_compatibility.csv 
+| stats first(*) AS * by "Data Type" 
+| sort sort_order 
+| rename onboarded_hosts AS "Onboarded Hosts" 
+| fields "Data Type", "Onboarded Hosts", "ITSI Modules*", "SAI*", "Windows Dashboards*", "Windows Monitoring*", "Windows Entity Type"</query>
+          <earliest>$timerange.earliest$</earliest>
+          <latest>$timerange.latest$</latest>
+        </search>
+        <option name="drilldown">cell</option>
+        <option name="percentagesRow">false</option>
+        <option name="totalsRow">false</option>
+        <format type="color" field="ITSI Modules&#10;(KPIs and Entity Discovery Searches)">
+          <colorPalette type="map">{"Yes":#6DA161,"No":#CC5849,"Maybe*1":#F0BF52,"N/A":#818D99}</colorPalette>
+        </format>
+        <format type="color" field="SAI KPI Base Searches (ITSI)">
+          <colorPalette type="map">{"Yes":#6DA161,"No":#CC5849,"Maybe*1":#F0BF52,"N/A":#818D99}</colorPalette>
+        </format>
+        <format type="color" field="Windows Dashboards and Reports CP">
+          <colorPalette type="map">{"Yes":#6DA161,"No":#CC5849,"No*2":#CC5849,"Maybe*1":#F0BF52,"N/A":#818D99}</colorPalette>
+        </format>
+        <format type="color" field="Windows Monitoring CP">
+          <colorPalette type="map">{"Yes":#6DA161,"No":#CC5849,"Maybe*1":#F0BF52,"N/A":#818D99}</colorPalette>
+        </format>
+        <format type="color" field="Windows Entity Type">
+          <colorPalette type="map">{"Yes":#6DA161,"No":#CC5849,"Maybe*1":#F0BF52,"N/A":#818D99}</colorPalette>
+        </format>
+        <drilldown>
+          <condition field="Data Type">
+            <set token="form.data_type">$click.value2$</set>
+          </condition>
+          <condition field="*"></condition>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <input type="text" token="host" searchWhenChanged="true">
+        <label>Host(s)</label>
+        <default>*</default>
+        <initialValue>*</initialValue>
+      </input>
+      <input type="dropdown" token="data_type" searchWhenChanged="true">
+        <label>Data Type</label>
+        <choice value="*">All Types</choice>
+        <default>*</default>
+        <initialValue>*</initialValue>
+        <fieldForLabel>Data Type</fieldForLabel>
+        <fieldForValue>Data Type</fieldForValue>
+        <search>
+          <query>|inputlookup windows_data_compatibility.csv
+| stats max(sort_order) AS sort_order by "Data Type"
+| sort sort_order</query>
+          <earliest>-24h@h</earliest>
+          <latest>now</latest>
+        </search>
+      </input>
+      <table>
+        <search base="all_windows_data">
+          <query>| stats values(sourcetype) AS sourcetype by host, "Data Type"
+| fields host, sourcetype, "Data Type"
+| search host=$host$ "Data Type"=$data_type|s$</query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+</form>
